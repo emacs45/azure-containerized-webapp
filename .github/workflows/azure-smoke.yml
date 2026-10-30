@@ -1,0 +1,51 @@
+
+name: Azure Container Apps Smoke Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  azure-smoke:
+    name: Test Azure QS and Production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    env:
+      QS_URL: https://ca-webapp-qs.ashymeadow-26ff2875.eastus.azurecontainerapps.io
+      PROD_URL: https://ca-webapp-production.ashymeadow-26ff2875.eastus.azurecontainerapps.io
+
+    steps:
+      - name: Test QS Environment
+        run: |
+          echo "Testing QS..."
+
+          response=$(curl -fsSL \
+            --retry 5 \
+            --retry-delay 3 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            "$QS_URL/")
+
+          echo "$response" | grep -Fq 'Environment: <strong>qs</strong>'
+          echo "$response" | grep -Fq 'Version: 1.0.0'
+
+          echo "QS smoke test passed"
+
+      - name: Test Production Environment
+        run: |
+          echo "Testing Production..."
+
+          response=$(curl -fsSL \
+            --retry 5 \
+            --retry-delay 3 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            "$PROD_URL/")
+
+          echo "$response" | grep -Fq 'Environment: <strong>production</strong>'
+          echo "$response" | grep -Fq 'Version: 1.0.0'
+
+          echo "Production smoke test passed"

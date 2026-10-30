@@ -1,0 +1,19 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Local variables and secrets
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/

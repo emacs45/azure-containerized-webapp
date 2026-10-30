@@ -1,5 +1,5 @@
 locals {
-  environments = toset(["qs", "production"])
+  environments = var.deploy_environments
 }
 
 resource "azurerm_container_app" "webapp" {

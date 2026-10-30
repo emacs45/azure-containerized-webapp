@@ -3,9 +3,29 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-for env in qs production; do
+# Select environment to test
+case "${1:-all}" in
+  qs)
+    environments=("qs")
+    ;;
+  production)
+    environments=("production")
+    ;;
+  all)
+    environments=("qs" "production")
+    ;;
+  *)
+    echo "Usage: $0 [qs|production|all]"
+    exit 1
+    ;;
+esac
+
+# Read Container App FQDNs from Terraform
+fqdns=$(terraform -chdir=terraform-local output -json container_app_fqdns)
+
+for env in "${environments[@]}"; do
   fqdn=$(
-    terraform -chdir=terraform-local output -json container_app_fqdns |
+    echo "$fqdns" |
       python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$env"
   )
 
@@ -13,6 +33,7 @@ for env in qs production; do
 
   response=$(curl -fsS \
     --retry 5 \
+    --retry-delay 2 \
     -H "Host: $fqdn" \
     http://localhost:4577/)
 
@@ -24,4 +45,4 @@ for env in qs production; do
   fi
 done
 
-echo "All smoke tests passed."
+echo "All requested smoke tests passed."

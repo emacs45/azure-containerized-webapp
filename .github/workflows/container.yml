@@ -22,9 +22,9 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  # --------------------------------------------------
+  # -------------------------------------------
   # Job 1: Build, test and publish Docker image
-  # --------------------------------------------------
+  # -------------------------------------------
   build-and-publish:
     name: Build and Publish Container
     runs-on: ubuntu-24.04
@@ -39,7 +39,7 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             -t "${IMAGE}:sha-${GITHUB_SHA}" .
 
-      - name: Smoke test
+      - name: Docker Smoke Test
         run: |
           docker run -d \
             --name webapp-test \
@@ -49,7 +49,7 @@ jobs:
 
           for i in {1..10}; do
             if curl -fsS http://localhost:8080/ | grep -q "Infrastructure Status"; then
-              echo "Smoke test passed"
+              echo "Docker smoke test passed"
               docker rm -f webapp-test
               exit 0
             fi
@@ -66,17 +66,17 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin
 
-      - name: Publish Docker image
+      - name: Publish Docker Image
         run: |
           docker tag "${IMAGE}:sha-${GITHUB_SHA}" "${IMAGE}:latest"
           docker push "${IMAGE}:sha-${GITHUB_SHA}"
           docker push "${IMAGE}:latest"
 
-  # --------------------------------------------------
-  # Job 2: Terraform deployment and integration tests
-  # --------------------------------------------------
-  floci-integration:
-    name: Floci AZ Integration Test
+  # -------------------------------------------
+  # Job 2: Deploy and test QS
+  # -------------------------------------------
+  floci-qs:
+    name: Deploy QS and Smoke Test
     needs: build-and-publish
     runs-on: ubuntu-24.04
 
@@ -109,7 +109,7 @@ jobs:
 
           curl -fsS http://localhost:4577/_floci/health
 
-      - name: Trust Floci TLS certificate
+      - name: Trust Floci TLS Certificate
         run: |
           curl -fsS \
             http://localhost:4577/_floci/tls-cert \
@@ -120,27 +120,103 @@ jobs:
 
           sudo update-ca-certificates
 
-          curl -fsS \
-            https://localhost:4577/metadata/endpoints
+          curl -fsS https://localhost:4577/metadata/endpoints
 
       - name: Terraform Init and Validate
         run: |
           terraform -chdir=terraform-local init -input=false
           terraform -chdir=terraform-local validate
 
-      - name: Deploy to Floci AZ
+      - name: Deploy QS
         run: |
           terraform -chdir=terraform-local apply \
             -auto-approve \
             -input=false \
             -var="image_tag=sha-${GITHUB_SHA}" \
-            -var="production_image_tag=sha-${GITHUB_SHA}"
+            -var="production_image_tag=sha-${GITHUB_SHA}" \
+            -var='deploy_environments=["qs"]'
 
-      - name: Integration Smoke Tests
+      - name: QS Smoke Test
         run: |
-          bash scripts/smoke-test.sh
+          bash scripts/smoke-test.sh qs
 
-      - name: Show Floci logs on failure
+      - name: Show Floci Logs on Failure
+        if: failure()
+        run: |
+          docker logs --tail 100 floci-az || true
+
+  # -------------------------------------------
+  # Job 3: Deploy Production after approval
+  # -------------------------------------------
+  floci-production:
+    name: Deploy Production and Smoke Test
+    needs: floci-qs
+    runs-on: ubuntu-24.04
+
+    environment:
+      name: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+
+      - name: Start Floci AZ
+        run: |
+          docker run -d \
+            --name floci-az \
+            -p 127.0.0.1:4577:4577 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e FLOCI_AZ_TLS_ENABLED=true \
+            -e FLOCI_AZ_SERVICES_CONTAINER_APPS_MOCKED=false \
+            floci/floci-az:latest
+
+          for i in {1..30}; do
+            if curl -fsS http://localhost:4577/_floci/health; then
+              break
+            fi
+            sleep 2
+          done
+
+          curl -fsS http://localhost:4577/_floci/health
+
+      - name: Trust Floci TLS Certificate
+        run: |
+          curl -fsS \
+            http://localhost:4577/_floci/tls-cert \
+            -o /tmp/floci-az.crt
+
+          sudo cp /tmp/floci-az.crt \
+            /usr/local/share/ca-certificates/floci-az.crt
+
+          sudo update-ca-certificates
+
+          curl -fsS https://localhost:4577/metadata/endpoints
+
+      - name: Terraform Init and Validate
+        run: |
+          terraform -chdir=terraform-local init -input=false
+          terraform -chdir=terraform-local validate
+
+      - name: Deploy Production
+        run: |
+          terraform -chdir=terraform-local apply \
+            -auto-approve \
+            -input=false \
+            -var="image_tag=sha-${GITHUB_SHA}" \
+            -var="production_image_tag=sha-${GITHUB_SHA}" \
+            -var='deploy_environments=["production"]'
+
+      - name: Production Smoke Test
+        run: |
+          bash scripts/smoke-test.sh production
+
+      - name: Show Floci Logs on Failure
         if: failure()
         run: |
           docker logs --tail 100 floci-az || true

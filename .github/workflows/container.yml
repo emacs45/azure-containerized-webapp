@@ -1,0 +1,66 @@
+
+name: Build and Publish Container
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/container.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -t "${IMAGE}:sha-${GITHUB_SHA}" .
+
+      - name: Smoke test
+        run: |
+          docker run -d \
+            --name webapp-test \
+            -p 8080:80 \
+            -e DEPLOY_ENV=qs \
+            "${IMAGE}:sha-${GITHUB_SHA}"
+
+          for i in {1..10}; do
+            if curl -fsS http://localhost:8080/ | grep -q "Infrastructure Status"; then
+              echo "Smoke test passed"
+              docker rm -f webapp-test
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs webapp-test
+          exit 1
+
+      - name: Login to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+          docker login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Publish Docker image
+        run: |
+          docker tag "${IMAGE}:sha-${GITHUB_SHA}" "${IMAGE}:latest"
+          docker push "${IMAGE}:sha-${GITHUB_SHA}"
+          docker push "${IMAGE}:latest"

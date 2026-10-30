@@ -1,0 +1,6 @@
+.git
+.github
+terraform
+README.md
+*.tfstate
+*.tfvars

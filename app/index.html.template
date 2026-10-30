@@ -1,0 +1,50 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Infrastructure Status</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+      margin: 0;
+      padding: 60px 24px;
+    }
+    main {
+      max-width: 680px;
+      margin: auto;
+    }
+    .card {
+      <p>Environment: <strong>${DEPLOY_ENV}</strong></p>
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 32px;
+    }
+    .badge {
+      color: #166534;
+      background: #dcfce7;
+      padding: 6px 12px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    h1 { margin-top: 0; }
+    footer { margin-top: 24px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Infrastructure Status</h1>
+      <p>Containerized web application running on Nginx.</p>
+      <span class="badge">Web server available</span>
+      <p>Platform: Docker / Azure Container Apps</p>
+      <p>Version: ${APP_VERSION}</p>
+    </div>
+    <footer>Infrastructure as Code · CI/CD · Cloud Engineering</footer>
+  </main>
+</body>
+</html>

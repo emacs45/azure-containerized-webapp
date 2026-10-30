@@ -1,72 +1,96 @@
 # Azure Containerized Web App
 
 [![Build and Publish Container](https://github.com/emacs45/azure-containerized-webapp/actions/workflows/container.yml/badge.svg)](https://github.com/emacs45/azure-containerized-webapp/actions/workflows/container.yml)
+[![Azure Container Apps Smoke Tests](https://github.com/emacs45/azure-containerized-webapp/actions/workflows/azure-smoke.yml/badge.svg)](https://github.com/emacs45/azure-containerized-webapp/actions/workflows/azure-smoke.yml)
 
-A small **Infrastructure as Code and CI/CD demonstration** that builds an Nginx web application, publishes an immutable Docker image to GitHub Container Registry (GHCR), and deploys it to **QS** and **Production** using Terraform and [Floci AZ](https://github.com/floci-io/floci-az), a local Azure emulator.
+A containerized **Nginx web application** deployed to **Azure Container Apps** with Terraform and tested with **GitHub Actions**. The project also uses [Floci AZ](https://github.com/floci-io/floci-az) to emulate Azure Container Apps locally and exercise a CI/CD release-approval workflow.
 
-The project exercises an Azure Container Apps-style deployment and release approval flow **without requiring an Azure subscription**. Floci AZ runs the application containers through a local Docker engine; it is not a production Azure deployment.
+The same immutable image from **GitHub Container Registry (GHCR)** runs in both **QS** and **Production**, with the environment-specific content supplied through container environment variables.
+
+## Project status
+
+| Capability | Status |
+| --- | --- |
+| Docker build, health check and GHCR publishing | Implemented |
+| Terraform deployment to local Floci AZ | Tested successfully |
+| GitHub Actions QS tests and manual Production approval | Implemented with temporary Floci runners |
+| Terraform deployment to real Azure Container Apps | **Tested successfully in an Azure lab** |
+| Public HTTPS endpoints for Azure QS and Production | **Both tested successfully** |
+| GitHub-hosted HTTPS smoke tests against real Azure | **Tested successfully** |
+| Automated GitHub Actions deployment to real Azure | **Not yet implemented** |
+
+The real Azure deployment created one Container Apps Environment and two Container Apps. Both returned the correct environment marker and version `1.0.0` over HTTPS, using the **same SHA-tagged GHCR image**.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[Push to main] --> B[GitHub Actions: Build and Docker smoke test]
-    B --> C[GHCR: sha-commit image]
-    C --> D[QS job: Terraform + Floci AZ]
-    D --> E{QS HTTP smoke test}
-    E -->|Fail| F[Stop]
-    E -->|Pass| G{GitHub production approval}
-    G -->|Approved| H[Production job: Terraform + Floci AZ]
-    H --> I[Production HTTP smoke test]
+    A["Push to main"] --> B["GitHub Actions: Docker build + smoke test"]
+    B --> C["GHCR: immutable sha-commit image"]
+
+    C --> D["Floci AZ: QS test deployment"]
+    D --> E{"QS smoke test passed?"}
+    E -->|No| F["Stop"]
+    E -->|Yes| G{"GitHub Production approval"}
+    G -->|Approved| H["Floci AZ: Production test deployment"]
+    H --> I["Production smoke test"]
+
+    C --> J["Manual Terraform deployment to real Azure"]
+    J --> K["Azure Container Apps: QS + Production"]
+    L["GitHub Actions: azure-smoke.yml"] -->|"Public HTTPS tests"| K
 ```
 
-**Important:** The QS and Production CI jobs each start a **separate, temporary Floci AZ instance** on their own GitHub-hosted runner. An approval gates the Production test deployment, but the workflow does **not** promote an existing, persistent Azure environment. Both jobs deploy the same immutable GHCR image tag (`sha-${GITHUB_SHA}`).
+**Important distinctions:**
+
+- **Floci CI:** QS and Production use separate, temporary GitHub-hosted runners and independent emulator instances. The Production job is gated by a protected GitHub Environment. This tests the approval process; it does not update a persistent production deployment.
+- **Real Azure:** Terraform successfully deployed the same image to persistent Azure Container Apps in a training lab. The deployment was performed **manually**, not from GitHub Actions.
+- **Azure smoke workflow:** GitHub Actions connects to the already-running public Azure endpoints over HTTPS. It does not authenticate to Azure or provision resources.
 
 ## Tech stack
 
-- **Nginx + Docker:** Lightweight web application with environment-specific content and a container health check
-- **GHCR:** Public container image tagged by Git commit SHA (also published as `latest` for convenience)
-- **Terraform / AzureRM:** Resource group, Container Apps Environment, and container applications
-- **Floci AZ:** Local emulation of Azure Resource Manager and Azure Container Apps, with real Docker-backed containers
-- **GitHub Actions:** Build, image publishing, integration tests, and a manual Production approval gate
+- **Nginx, Docker:** Static web app rendered from `app/index.html.template` using `DEPLOY_ENV` and `APP_VERSION`
+- **GitHub Container Registry:** Public images tagged `sha-<commit>` and `latest`
+- **Terraform (AzureRM 4.x):** Infrastructure as Code for Container Apps and their environment
+- **Azure Container Apps:** Real cloud deployment with public HTTPS ingress
+- **Floci AZ:** Azure-compatible local emulator with actual Docker-backed Container Apps
+- **GitHub Actions:** Container build, integration tests, and a manual release approval gate
 
 ## Repository structure
 
 ```text
 .
-├── .github/workflows/container.yml  # Build, QS test, Production approval and test
-├── app/index.html.template          # Nginx environment-variable template
-├── scripts/smoke-test.sh            # HTTP integration tests (qs/production/all)
-├── terraform-local/                 # Working Floci AZ Terraform deployment
-├── terraform/                       # Real Azure Terraform configuration (lab access dependent)
+├── .github/workflows/
+│   ├── container.yml           # Build, publish, Floci QS, approval, Floci Production
+│   └── azure-smoke.yml         # On-demand HTTPS tests against real Azure
+├── app/index.html.template     # Environment-specific Nginx page
+├── scripts/smoke-test.sh       # Floci ingress tests: qs / production / all
+├── terraform-local/            # Terraform configuration for Floci AZ
 ├── Dockerfile
-└── .dockerignore
+├── .dockerignore
+└── README.md
 ```
 
-## Deployment environments
+The **real Azure Terraform configuration** was validated from a separate local `terraform/` directory. **That directory has not yet been committed to this repository.** To reproduce Azure provisioning from a fresh clone, it must first be added (without any Terraform state or local credentials).
+
+## Environments
 
 | Setting | QS | Production |
 | --- | --- | --- |
-| Container App name | `ca-webapp-qs` | `ca-webapp-production` |
+| Container App | `ca-webapp-qs` | `ca-webapp-production` |
 | `DEPLOY_ENV` | `qs` | `production` |
 | `APP_VERSION` | `1.0.0` | `1.0.0` |
-| Container port | `80` | `80` |
-| Replicas (local) | `1` | `1` |
-| Image | GHCR `sha-<commit>` | Same GHCR `sha-<commit>` |
+| Target port | `80` | `80` |
+| Image | GHCR SHA tag | **Same GHCR SHA tag** |
+| Floci ingress | Local HTTP via `localhost:4577` | Local HTTP via `localhost:4577` |
+| Real Azure ingress | Public HTTPS | Public HTTPS |
 
-Both apps use HTTP ingress through the local emulator on `localhost:4577`; routing uses the `Host` header returned by Terraform. **Local Floci ingress is not a public Azure HTTPS endpoint.**
+The real Azure environment uses scale-to-zero settings (0–1 replicas); the local Floci configuration uses one replica per app.
 
 ## Run locally with Floci AZ
 
-### Prerequisites
+**Prerequisites:** Docker Engine, Terraform with AzureRM 4.x, Bash, Python 3, `curl`, OpenSSL and CA certificate tools.
 
-- Docker Engine, Terraform 1.x with the AzureRM 4.x provider, Bash, Python 3, `curl`, and OpenSSL/CA certificate tools
-- A working local Docker daemon and permission to use its socket
-- Access to the public image at `ghcr.io/emacs45/azure-containerized-webapp`
-
-> **Security:** Mounting `/var/run/docker.sock` gives the Floci container powerful access to the host Docker engine. Run it only in a trusted local development environment or an isolated CI runner.
-
-### 1. Start the emulator
+### 1. Start Floci
 
 ```bash
 docker run -d \
@@ -80,53 +104,45 @@ docker run -d \
 curl -fsS http://localhost:4577/_floci/health
 ```
 
-The `MOCKED=false` setting is essential: Floci runs actual Docker containers for the Container App replicas.
+`MOCKED=false` enables real Docker-backed replicas rather than simulated resource state only.
 
-### 2. Trust the emulator's local TLS certificate (Linux/WSL)
+> **Security:** The Docker socket grants powerful access to the host. Run Floci only in a trusted development environment or an isolated CI runner.
 
-The AzureRM provider uses HTTPS to discover the emulated Azure endpoints. Floci generates a local self-signed certificate.
+### 2. Trust the local TLS certificate (Linux/WSL)
+
+Terraform's AzureRM provider discovers the Floci cloud endpoints over HTTPS.
 
 ```bash
 curl -fsS http://localhost:4577/_floci/tls-cert -o /tmp/floci-az.crt
 sudo cp /tmp/floci-az.crt /usr/local/share/ca-certificates/floci-az.crt
 sudo update-ca-certificates
+
 curl -fsS https://localhost:4577/metadata/endpoints
 ```
 
-Alternatively, configure `SSL_CERT_FILE` to point to a CA bundle containing both the system certificates and the Floci certificate. If Floci regenerates its certificate, update the trusted certificate before the next Terraform run.
+If Floci regenerates its certificate, refresh the trusted certificate before using Terraform again.
 
-### 3. Deploy the applications
+### 3. Deploy and test
 
-Choose a **published image tag** from the [GHCR package](https://github.com/emacs45/azure-containerized-webapp/pkgs/container/azure-containerized-webapp). A README-only commit does not necessarily create a new image because the workflow is path-filtered.
+Choose a [published GHCR image tag](https://github.com/emacs45/azure-containerized-webapp/pkgs/container/azure-containerized-webapp). This tag is a known working example:
 
 ```bash
-# Example of a known published image; replace with a newer published SHA as needed.
 IMAGE_TAG="sha-fcd36828a7a50786c920478817716dc8cac6b483"
 
 terraform -chdir=terraform-local init
 terraform -chdir=terraform-local validate
 terraform -chdir=terraform-local plan \
-  -var="image_tag=${IMAGE_TAG}" \
-  -var="production_image_tag=${IMAGE_TAG}"
+  -var="image_tag=$IMAGE_TAG" \
+  -var="production_image_tag=$IMAGE_TAG"
 terraform -chdir=terraform-local apply \
-  -var="image_tag=${IMAGE_TAG}" \
-  -var="production_image_tag=${IMAGE_TAG}"
-```
+  -var="image_tag=$IMAGE_TAG" \
+  -var="production_image_tag=$IMAGE_TAG"
 
-The default `deploy_environments` value deploys **both** `qs` and `production` in one local Terraform state.
-
-### 4. Run the integration tests
-
-```bash
 bash scripts/smoke-test.sh qs
 bash scripts/smoke-test.sh production
-# Or test both:
-bash scripts/smoke-test.sh
 ```
 
-The smoke-test script retrieves the Container App FQDNs from Terraform output and sends HTTP requests with the appropriate `Host` headers to Floci. It fails if the application cannot be reached or returns the wrong environment marker.
-
-Example successful output:
+The smoke tests obtain FQDNs from Terraform outputs and send requests to `localhost:4577` with the appropriate HTTP `Host` header. They fail if an app is unavailable or returns the wrong environment marker.
 
 ```text
 Testing qs (...)...
@@ -136,33 +152,60 @@ PASS: production
 All requested smoke tests passed.
 ```
 
-### 5. Clean up
+### 4. Clean up
 
 ```bash
 terraform -chdir=terraform-local destroy \
-  -var="image_tag=${IMAGE_TAG}" \
-  -var="production_image_tag=${IMAGE_TAG}"
+  -var="image_tag=$IMAGE_TAG" \
+  -var="production_image_tag=$IMAGE_TAG"
 docker rm -f floci-az
 ```
 
-> **Terraform state caution:** Setting `deploy_environments=["qs"]` in an **existing state that also manages Production** would plan to destroy Production. The GitHub Actions jobs avoid this by using fresh, independent runners and Terraform states. Review every `terraform plan` before changing the environment selection in a persistent state.
+**Terraform-state caution:** Do not switch `deploy_environments` from both environments to just QS or Production against an existing shared state without reviewing the plan; Terraform would propose destroying the omitted app. The CI jobs use fresh, separate states to avoid this problem.
 
-## CI/CD workflow
+## GitHub Actions workflows
 
-The workflow is defined in [`.github/workflows/container.yml`](.github/workflows/container.yml) and runs on eligible pushes to `main` or through `workflow_dispatch`.
+### 1. [Build and Publish Container](.github/workflows/container.yml)
 
-1. **Build and Publish Container:** Build the Nginx image, run a Docker smoke test, and publish `sha-${GITHUB_SHA}` and `latest` to GHCR.
-2. **Deploy QS and Smoke Test:** Start Floci AZ on a GitHub-hosted runner, configure certificate trust, deploy only QS with Terraform, and test the HTTP endpoint.
-3. **Production approval:** Wait for approval via the repository's protected `production` GitHub Environment.
-4. **Deploy Production and Smoke Test:** On a separate runner, start a new Floci AZ instance, deploy only Production using the **same immutable SHA image**, and run the Production HTTP test.
+Triggered by eligible pushes to `main` or manually:
 
-Production approval must be configured in **Settings → Environments → production → Required reviewers**. This is a demonstration of a controlled release gate, not a continuously running production service.
+1. Build the Docker image and run a container smoke test.
+2. Publish `sha-<commit>` and `latest` to GHCR.
+3. Start Floci AZ on a GitHub-hosted runner, deploy **QS** with Terraform, and run an ingress smoke test.
+4. Wait for approval from the protected **production** GitHub Environment.
+5. On a separate runner, deploy and test **Production**, using the **same immutable SHA-tagged image**.
 
-## Real Azure status and limitations
+This workflow validates a CI/CD release gate in an emulated environment. It does **not** deploy to the real Azure lab.
 
-- The working integration test uses **Floci AZ**, not Microsoft Azure.
-- The `terraform/` directory contains a separate configuration intended for real Azure Container Apps. Earlier attempts were blocked by restricted lab RBAC permissions (`Microsoft.App/managedEnvironments/read`, and initially Log Analytics access).
-- Real Azure deployment, GitHub Actions authentication to Azure (preferably via OIDC), a shared remote Terraform state, and externally accessible HTTPS smoke tests are **not yet implemented**.
-- Floci emulates Azure APIs and ingress behavior; it does not validate all real Azure permissions, policies, networking, scaling, or availability characteristics.
+### 2. [Azure Container Apps Smoke Tests](.github/workflows/azure-smoke.yml)
 
-**Next step:** Validate Azure Container Apps access in a new lab subscription and adapt the integration workflow to deploy to real Azure while preserving the existing Floci CI tests.
+A manually triggered (`workflow_dispatch`) GitHub Actions workflow that checks the **real Azure QS and Production HTTPS endpoints** for the expected environment markers and version.
+
+- **Requires no Azure credentials:** It only sends HTTPS requests to public endpoints.
+- **Does not deploy or update Azure:** The apps must already exist.
+- **Lab-specific URLs:** The workflow currently uses endpoints from the training lab. Update them after recreating the environment; the tests will fail when the lab expires or its apps are deleted.
+
+The first manually triggered Azure smoke-test workflow completed successfully.
+
+## Real Azure deployment
+
+The real Azure lab deployment was created using Terraform in a local `terraform/` configuration against an **existing lab resource group**. It provisioned:
+
+- One Azure Container Apps Environment (`cae-containerized-webapp`)
+- One QS Container App (`ca-webapp-qs`)
+- One Production Container App (`ca-webapp-production`)
+
+Both applications successfully served their environment-specific HTML over public HTTPS with the **same GHCR image** (`sha-fcd36828a7a50786c920478817716dc8cac6b483`).
+
+Log Analytics was intentionally omitted in this lab configuration. The real Azure Terraform code and state are distinct from `terraform-local/`; **the real Azure Terraform directory still needs to be added to the repository** for full reproducibility.
+
+A complete Azure deployment automation would also require a dedicated GitHub Actions deployment identity (preferably OIDC), appropriate Azure RBAC roles, and persistent remote Terraform state. These are **not** configured in this project yet.
+
+## Limitations and next steps
+
+- **Floci is an emulator:** It does not reproduce all Azure platform behavior, networking, security policies, or scaling semantics.
+- **Training lab resources are temporary:** Live Azure URLs and manual smoke tests depend on the lab remaining active.
+- **No automated Azure provisioning from GitHub Actions yet:** Azure deployments are performed with locally authenticated Terraform; GitHub Actions currently validates the live Azure endpoints only.
+- **Recommended next steps:** Commit the real Azure Terraform files without state or credentials; add OIDC-based deployment credentials and remote state if a suitable Azure subscription becomes available.
+
+For safety and cost control, review Terraform plans and destroy lab resources when no longer needed.
